@@ -1,0 +1,227 @@
+import numpy as np
+from sklearn.preprocessing import normalize
+nt_dict = {"A":0, "C":1, "G":2, "T":3}
+
+
+
+def init_p(l, w, seqs, nt_dict):
+    '''
+    This function initializes weight matrix p_0, which represents our
+    initial guess for the profile of the motif. The dimensions of p_0
+    are (4, w+1), where w is the width of the motif. (The first column
+    of p_0 represents the background probability of each nucleotide, while
+    each subsequent column represents the probability of seeing each
+    nucleotide at that position in the motif.)
+
+    The weight matrix p_0 is initialized by considering all possible motif
+    starting positions in every sequence and counting the number of times
+    each nucleotide appears in each position of a motif. The background
+    probability of each nucleotide is initialized as uniform. The weight matrix
+    p_0 is then normalized so that each column sums to 1.
+
+    Inputs
+    - l: The length of the sequence (assumes all sequences are the same length)
+    - w: The width of the motif
+    - seqs: A list of strings representing the sequences
+    - nt_dict: A dictionary mapping each nucleotide to its index
+
+    Outputs
+    - p_0: A matrix of size (4, w+1) representing the motif profile
+    '''
+    p_0 = np.zeros((4, w + 1))
+
+    # set a uniform background probability for each nucleotide
+    for i in nt_dict.keys():
+        p_0[nt_dict[i]][0] = 0.25
+
+    # count nucleotides in all possible motifs for each sequence
+    for sequence in seqs:
+        # i in range(l-w+1) -> all possible motif starting positions
+        for i in range(l - w + 1):
+            # j in range(w) -> position within the motif
+            for j in range(w):
+                # Fill in p_0
+                p_0[nt_dict[sequence[i + j]]][j+1] += 1
+
+    # normalize columns to sum to 1
+    p_0 = normalize(p_0, axis=0, norm='l1')
+    return p_0
+
+
+def update_locations(l, w, p, seqs, nt_dict):
+    '''
+    This function updates z, a matrix representing the expected location of
+    the motif in each sequence.
+
+    Inputs
+    - l: The length of the sequence (assumes all sequences are the same length)
+    - w: The width of the motif
+    - p: A matrix of size (4, w+1) representing the motif profile
+    - seqs: A list of strings representing the sequences
+    - nt_dict: A dictionary mapping each nucleotide to its index
+
+    Outputs
+    - z: A matrix of size(len(seqs), l-w+1) representing the expected location
+            of the motif in each sequence. Z_ij == the probability that the motif
+            starts at position j in sequence i.
+    '''
+    z = np.zeros((len(seqs), l - w + 1))
+
+    # consider each sequence i
+    for i, sequence in enumerate(seqs):
+        # consider each possible starting position for the motif j
+        for j in range(l - w + 1):
+            # a list of conditional probabilities
+            p_vals = []
+            # consider the nucleotide at each position in the sequence
+            for position, nt in enumerate(sequence):
+                # HINT: what is the probability of seeing nt at this position,
+                # given that the motif begins at position j?
+                # HINT: multiply each probability by 10 to avoid underflow errors (see pdf)
+                if position >= j+w:
+                    p_vals.append(p[nt_dict[nt]][0] * 100)
+                elif position >= j:
+                    p_vals.append(p[nt_dict[nt]][position-j+1]*100)
+                elif position < j:
+                    p_vals.append(p[nt_dict[nt]][0] * 100)
+
+
+            # update Z_ij
+            z[i][j] = np.prod(p_vals)
+
+    # Normalize z_t so that the sum of each row is equal to 1
+    z = normalize(z, axis=1, norm='l1')
+    return z
+
+
+def update_profile(l, w, z, seqs, nt_dict):
+    '''
+    This function updates the motif profile p, based on an updated matrix z of the
+    expected locations of the motif in each sequence.
+
+    Note: Use a pseudo-count of 1
+
+    Inputs
+    - l: The length of the sequence (assumes all sequences are the same length)
+    - w: The width of the motif
+    - z: A matrix of size(len(seqs), l-w+1) representing the expected location
+            of the motif in each sequence. Z_ij == the probability that the motif
+            starts at position j in sequence i.
+    - seqs: A list of strings representing the sequences
+    - nt_dict: A dictionary mapping each nucleotide to its index
+
+    Outputs
+    - p: A matrix of size (4, w+1) representing the motif profile
+    '''
+    p = np.zeros((4, w + 1))
+    n = np.zeros((4, w + 1))
+
+    # Fill in n for k > 0
+    for k in range(1, w + 1):
+        for nt in nt_dict.keys():
+            sum_z = 0  # sum of relevant probabilities Z_ij
+            for i, sequence in enumerate(seqs):
+                # Add relevant probabilities Z_ij to sum_z
+                for j in range(l - w + 1):
+                    motif = sequence[j:j + w]
+                    if motif[k - 1] == nt:
+                        sum_z += z[i][j]
+            # update n
+            n[nt_dict[nt]][k] = sum_z
+
+    # Fill in n for k == 0
+    for nt in nt_dict.keys():
+        sum_all_n = 0
+        for i, sequence in enumerate(seqs):
+            for position, bp in enumerate(sequence):
+                if bp == nt:
+                    sum_all_n += 1
+        n[nt_dict[nt]][0] = sum_all_n - np.sum(n[nt_dict[nt]][1:])
+
+    # use n to calculate p
+    # Pseudo-count = 1
+    n = n + 1
+    p = normalize(n, axis=0, norm='l1')
+
+    return p
+
+
+def update_profile_E_or_M():
+    '''
+    Is update_profile the expectation or maximization step of the EM algorithm?
+
+    Have this function return 'E' for expectation or 'M' for maximization.
+    '''
+    return 'M'
+
+
+def run_EM(w, seqs, nt_dict, epsilon=2 ** -64):
+    '''
+    This function runs the Expectation Maximization algorithm for motif-finding.
+
+    Hint: Use the previously defined functions init_p, update_locations, and update_motif
+
+    Inputs
+    - w: the width of the motif
+    - seqs: A list of (same-length) strings representing the sequences
+    - nt_dict: A dictionary mapping each nucleotide to its index
+    - epsilon: A small value. Terminate the algorithm if the difference between p_t
+            and p_prev is smaller than epsilon for each cell in the matrix.
+
+    Outputs
+    - p_t: A matrix of size (4, w+1) representing the motif profile at the end of
+            the EM algorithm.
+    - z_t: A matrix of size(len(seqs), l-w+1) representing the expected location
+            of the motif in each sequence at the end of the EM algorithm.
+    '''
+    l = len(seqs[0])  # length of the sequence
+    no_change = False  # terminate algorithm when there is no change
+
+    # initialize p
+    p_pre = init_p(l, w, seqs, nt_dict)
+    while not no_change:
+        # update z_t
+        z = update_locations(l, w, p_pre, seqs, nt_dict)
+
+        # update p_t
+        p_new = update_profile(l, w, z, seqs, nt_dict)
+
+        # stop loop if the difference between p_t and p_prev is small enough
+        diff = p_new - p_pre
+        diff = np.min(np.min(diff))
+        if abs(diff) > epsilon:
+            p_pre = p_new
+        else:
+            no_change = True
+
+    p_t = p_pre
+    z_t = z
+
+    return p_t, z_t
+
+sequences = ["AATCG","ATCGT","AACGA"]
+l = 5
+width = 2
+p_final,z_final = run_EM(width,sequences,nt_dict,0.0001)
+print('\nFinal p:')
+print(p_final)
+assert(p_final.shape == (4, width+1)), "dimensions of p_final are incorrect"
+assert(np.all(np.sum(p_final, axis=0) == 1.)), "columns of p_final do not sum to 1"
+print('\nFinal z:')
+print(z_final)
+assert(z_final.shape == (len(sequences), len(sequences[0])-width+1)), "dimensions of z_t are incorrect"
+#assert(np.all(np.sum(z_final, axis=1) == 1.)), "rows of z_t do not sum to 1"
+# Note - if the rows of z don't add up to 1, you might be encountering an underflow error
+# try scaling the conditional probabilities you are multiplying together by a constant value to avoid this
+print('\nConsensus motif:')
+nt_lookup = {nt_dict[nt]:nt for nt in 'ACGT'}
+best_motif = "".join([nt_lookup[x] for x in np.argmax(p_final[1:], axis=0)])
+print(best_motif)
+print('\nPositions of motifs in sequence:')
+motif_indices = np.argmax(z_final, axis=1)
+print(motif_indices)
+print('\nMotif in each sequence:')
+print(len(sequences[0]))
+print(np.all([len(s)==len(sequences[0]) for s in sequences]))
+motifs = [sequences[i][pos:pos+width] for i,pos in enumerate(motif_indices)]
+print(motifs)
